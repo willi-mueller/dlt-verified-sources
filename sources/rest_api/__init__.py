@@ -232,6 +232,7 @@ def create_resources(
         (
             incremental_object,
             incremental_param,
+            _,
         ) = setup_incremental_object(request_params, endpoint_config.get("incremental"))
 
         client = RESTClient(
@@ -262,9 +263,9 @@ def create_resources(
                 incremental_param: IncrementalParam = incremental_param,
             ) -> Generator[Any, None, None]:
                 if incremental_object:
-                    params[incremental_param.start] = incremental_object.last_value
-                    if incremental_param.end:
-                        params[incremental_param.end] = incremental_object.end_value
+                    params = _set_incremental_params(
+                        params, incremental_object, incremental_param
+                    )
 
                 yield from client.paginate(
                     method=method,
@@ -309,9 +310,9 @@ def create_resources(
                 incremental_param: IncrementalParam = incremental_param,
             ) -> Generator[Any, None, None]:
                 if incremental_object:
-                    params[incremental_param.start] = incremental_object.last_value
-                    if incremental_param.end:
-                        params[incremental_param.end] = incremental_object.end_value
+                    params = _set_incremental_params(
+                        params, incremental_object, incremental_param
+                    )
 
                 for item in items:
                     formatted_path, parent_record = process_parent_data_item(
@@ -345,6 +346,23 @@ def create_resources(
             )
 
     return resources
+
+
+def _set_incremental_params(
+    params: Dict[str, Any],
+    incremental_object: Incremental[Any],
+    incremental_param: IncrementalParam,
+):
+    def identity(x):
+        return x
+
+    transformation = incremental_object.get("transform", None)
+    if transformation is None:
+        transformation = identity
+    params[incremental_param.start] = transformation(incremental_object.last_value)
+    if incremental_param.end:
+        params[incremental_param.end] = transformation(incremental_object.end_value)
+    return params
 
 
 def _validate_param_type(

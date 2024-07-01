@@ -1,3 +1,5 @@
+import pendulum
+
 import dlt.extract
 import pytest
 from copy import copy, deepcopy
@@ -13,7 +15,13 @@ from dlt.sources.helpers.rest_client.paginators import (
     HeaderLinkPaginator,
 )
 
-from sources.rest_api import rest_api_source, rest_api_resources, _validate_param_type
+from sources.rest_api import (
+    rest_api_source,
+    rest_api_resources,
+    _validate_param_type,
+    _set_incremental_params,
+)
+
 from sources.rest_api.config_setup import (
     AUTH_MAP,
     PAGINATOR_MAP,
@@ -553,7 +561,9 @@ def test_incremental_from_request_param():
             "initial_value": "2024-01-01T00:00:00Z",
         },
     }
-    (incremental_config, incremental_param) = setup_incremental_object(request_params)
+    (incremental_config, incremental_param, _) = setup_incremental_object(
+        request_params
+    )
     assert incremental_config == dlt.sources.incremental(
         cursor_path="updated_at", initial_value="2024-01-01T00:00:00Z"
     )
@@ -582,7 +592,9 @@ def test_incremental_source_in_request_param():
             cursor_path="updated_at", initial_value="2024-01-01T00:00:00Z"
         ),
     }
-    (incremental_config, incremental_param) = setup_incremental_object(request_params)
+    (incremental_config, incremental_param, _) = setup_incremental_object(
+        request_params
+    )
     assert incremental_config == dlt.sources.incremental(
         cursor_path="updated_at", initial_value="2024-01-01T00:00:00Z"
     )
@@ -596,10 +608,11 @@ def test_endpoint_config_incremental():
             "end_param": "until",
             "cursor_path": "updated_at",
             "initial_value": "2024-01-25T11:21:28Z",
+            "transform": lambda epoch: pendulum.from_timestamp(epoch),
         }
     }
     incremental_config = cast(IncrementalConfig, config.get("incremental"))
-    (_, incremental_param) = setup_incremental_object(
+    (_, incremental_param, _) = setup_incremental_object(
         {},
         incremental_config,
     )
@@ -627,6 +640,95 @@ def test_many_incrementals_in_resource():
         "Only a single incremental parameter is allower per endpoint. Found: ['first_incremental', 'second_incremental']"
         in str(e.value)
     )
+
+
+def test_setup_incremental_with_transform_in_incremental_config(mocker):
+    def epoch_to_datetime(epoch):
+        return pendulum.from_timestamp(epoch)
+
+    incremental_config: IncrementalConfig = {
+        "start_param": "since",
+        "end_param": "until",
+        "cursor_path": "updated_at",
+        "initial_value": "2024-01-25T00:00:00Z",
+        "transform": epoch_to_datetime,
+    }
+
+    (_, incremental_param, transform) = setup_incremental_object(
+        {}, incremental_config
+    )
+    assert incremental_param == IncrementalParam(start="since", end="until")
+    assert transform == epoch_to_datetime
+
+
+def test_transform_incremental_param(mocker):
+    def epoch_to_datetime(epoch):
+        return pendulum.from_timestamp(epoch).strftime("%Y-%m-%d")
+
+    incremental_config: IncrementalConfig = {
+        "start_param": "since",
+        "end_param": "until",
+        "cursor_path": "updated_at",
+        "initial_value": "2024-01-25T00:00:00Z",
+        "transform": epoch_to_datetime,
+    }
+    incremental_mock = mocker.Mock()
+    incremental_mock.last_value = 1
+    incremental_mock.end_value = 60 * 60 * 24
+    incremental_mock.get = (
+        lambda key, default=None: epoch_to_datetime if key == "transform" else None
+    )
+
+    (_, incremental_param, _) = setup_incremental_object({}, incremental_config)
+    assert {"since": "1970-01-01", "until": "1970-01-02"} == _set_incremental_params(
+        {}, incremental_mock, incremental_param
+    )
+
+
+# def test_set_params_if_incremental_with_transform():
+#     params = {}
+#     incremental_object = {"incremental_object": 12412312}
+
+#     assert {"since": "2024-01-01"} == _set_incremental_params(
+#         params, incremental_object, incremental_param
+#     )
+
+
+# def test_endpoint_incremental_calls_with_transformed_cursor():
+#     config = {
+#         "incremental": {
+#             "start_param": "since",
+#             "end_param": "until",
+#             "cursor_path": "updated_at",
+#             "initial_value": "2024-01-25T11:21:28Z",
+#         }
+#     }
+#     incremental_config = cast(IncrementalConfig, config.get("incremental"))
+#     (_, incremental_param) = setup_incremental_object(
+#         {},
+#         incremental_config,
+#     )
+#     assert incremental_param == IncrementalParam(start="since", end="until")
+
+
+# def param_constructs_incremental_with_transformed_cursor():
+#     def epoch_to_date(epoch):
+#         return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d")
+
+#     request_params = {
+#         "foo": "bar",
+#         "since": {
+#             "type": "incremental",
+#             "cursor_path": "updated_at",
+#             "initial_value": "2024-01-01",
+#             "transform": epoch_to_date,
+#         },
+#     }
+#     (incremental_config, incremental_param) = setup_incremental_object(request_params)
+#     assert incremental_config == dlt.sources.incremental(
+#         cursor_path="updated_at", initial_value="2024-01-01"
+#     )
+#     assert incremental_param == IncrementalParam(start="since", end=None)
 
 
 def test_resource_hints():
